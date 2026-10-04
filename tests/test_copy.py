@@ -383,6 +383,15 @@ def test_pretend_option(tmp_path: Path) -> None:
     assert not (tmp_path / "pyproject.toml").exists()
 
 
+def test_pretend_summary(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Pretend mode reports the rendered file count and writes nothing."""
+    render(tmp_path, pretend=True, quiet=False)
+    err = capsys.readouterr().err
+    assert "Dry run complete: rendered" in err
+    assert "nothing was written" in err
+    assert not list(tmp_path.iterdir())
+
+
 @pytest.mark.parametrize("generate", [True, False])
 def test_empty_dir(tmp_path_factory: pytest.TempPathFactory, generate: bool) -> None:
     src, dst = map(tmp_path_factory.mktemp, ("src", "dst"))

@@ -420,7 +420,8 @@ Switches:
                                     tags.
     -l, --defaults                  Use default answers to questions, which
                                     might be null if not specified.
-    -n, --pretend                   Run but do not make any changes
+    -n, --pretend                   Run but do not make any changes (dry run:
+                                    preview the rendered file set)
     -q, --quiet                     Suppress status output
     -r, --vcs-ref VALUE:str         Git reference to checkout in `template_src`.
                                     If you do not specify it, it will try to
@@ -492,7 +493,8 @@ Switches:
                                     tags.
     -l, -f, --defaults              Use default answers to questions, which
                                     might be null if not specified.
-    -n, --pretend                   Run but do not make any changes
+    -n, --pretend                   Run but do not make any changes (dry run:
+                                    preview the rendered file set)
     -o, --conflict VALUE:{rej, inline} Behavior on conflict: Create .rej files, or
                                     add inline conflict markers.; the default is
                                     inline

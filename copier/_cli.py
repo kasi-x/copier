@@ -150,7 +150,10 @@ class _Subcommand(cli.Application):
             "of the template if it already exists."
         ),
     )
-    pretend = cli.Flag(["-n", "--pretend"], help="Run but do not make any changes")
+    pretend = cli.Flag(
+        ["-n", "--pretend"],
+        help="Run but do not make any changes (dry run: preview the rendered file set)",
+    )
     skip = cli.SwitchAttr(
         ["-s", "--skip"],
         str,

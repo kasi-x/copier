@@ -272,6 +272,7 @@ class Worker:
 
     answers: AnswersMap = field(default_factory=AnswersMap, init=False)
     _cleanup_hooks: list[Callable[[], None]] = field(default_factory=list, init=False)
+    _rendered_paths: list[Path] = field(default_factory=list, init=False)
 
     def __enter__(self) -> Self:
         """Allow using worker as a context manager."""
@@ -828,6 +829,7 @@ class Worker:
                     raise ForbiddenPathError(path=dst_relpath)
                 if self.match_exclude(dst_relpath):
                     continue
+                self._rendered_paths.append(dst_relpath)
                 if src.is_symlink() and self.template.preserve_symlinks:
                     self._render_symlink(src_relpath, dst_relpath)
                 elif src.is_dir(follow_symlinks=follow_symlinks):
@@ -1288,6 +1290,13 @@ class Worker:
                 )
             with Phase.use(Phase.RENDER):
                 self._render_template()
+            if self.pretend and not self.quiet:
+                print(
+                    f"\nDry run complete: rendered {len(self._rendered_paths)} "
+                    f"entr{'y' if len(self._rendered_paths) == 1 else 'ies'} to "
+                    f"{self.dst_path} — nothing was written.",
+                    file=sys.stderr,
+                )
             if not self.quiet:
                 # TODO Unify printing tools
                 print()  # padding space

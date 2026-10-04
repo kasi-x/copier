@@ -1537,7 +1537,11 @@ generation will be aborted and an error will be shown to the user.
 - CLI flags: `-n`, `--pretend`
 - Default value: `False`
 
-Run but do not make any changes.
+Run but do not make any changes. Questions are resolved and the file set is
+rendered in memory; each file reports its would-be action (`create`,
+`identical`, `conflict`, ...) on stderr, followed by a summary line, but the
+destination is never touched. Use it to preview a render in CI or from
+scripts, e.g. `copier copy --pretend <template> <dst>`.
 
 !!! info
 
