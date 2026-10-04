@@ -162,7 +162,9 @@ class UnsafeTemplateError(CopierError):
         s = "s" if len(features) > 1 else ""
         super().__init__(
             f"Template uses potentially unsafe feature{s}: {', '.join(features)}.\n"
-            "If you trust this template, consider adding the `--trust` option when running `copier copy/update`."
+            "If you trust this template, consider adding the `--trust` option "
+            "when running `copier copy/update`, or add it to the `trust` list "
+            "in your Copier settings (https://copier.readthedocs.io/en/stable/settings/#trusted-locations)."
         )
 
 

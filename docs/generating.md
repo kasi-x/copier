@@ -3,7 +3,9 @@
 !!! warning
 
     Generate projects only from trusted templates as their tasks run with the
-    same level of access as your user.
+    same level of access as your user. If a template refuses to run, you can
+    pass `--trust` once or list it in the [`trust` setting](settings.md#trusted-locations)
+    so trusted sources need no flag.
 
 As seen in the quick usage section, you can generate a project from a template using the
 `copier` command-line tool:
