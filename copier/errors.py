@@ -43,6 +43,7 @@ __all__ = [
     "PathNotAbsoluteError",
     "PathNotRelativeError",
     "ShallowCloneWarning",
+    "StaleTagWarning",
     "TaskError",
     "UnknownCopierVersionWarning",
     "UnsafeTemplateError",
@@ -222,6 +223,10 @@ class DirtyLocalWarning(UserWarning, CopierWarning):
 
 class ShallowCloneWarning(UserWarning, CopierWarning):
     """The template repository is a shallow clone."""
+
+
+class StaleTagWarning(UserWarning, CopierWarning):
+    """The resolved latest tag is behind the default branch."""
 
 
 class MissingSettingsWarning(UserWarning, CopierWarning):

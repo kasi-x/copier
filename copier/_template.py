@@ -582,11 +582,16 @@ class Template:
         result = Path(self.url)
         if self.vcs == "git":
             self._temp_clone_path = Path(mkdtemp(prefix=CLONE_PREFIX))
+            # An implicit ref resolves to the latest tag, which may be a stale
+            # upstream tag on a fork -- warn_stale compares it against the
+            # default branch. An explicit ref is the user's own choice, so the
+            # warning stays off there.
             result = Path(
                 clone(
                     self.url_expanded,
                     self.ref or get_latest_tag(self.url_expanded, self.use_prereleases),
                     location=str(self._temp_clone_path),
+                    warn_stale=self.ref is None,
                 )
             )
         if not result.is_dir():

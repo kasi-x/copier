@@ -21,7 +21,7 @@ from plumbum.commands.base import BaseCommand
 
 from ._tools import handle_remove_readonly
 from ._types import OptBool, OptStrOrPath, StrOrPath
-from .errors import DirtyLocalWarning, ShallowCloneWarning
+from .errors import DirtyLocalWarning, ShallowCloneWarning, StaleTagWarning
 
 GIT_USER_NAME = "Copier"
 GIT_USER_EMAIL = "copier@copier"
@@ -353,7 +353,58 @@ def _clone_via_cache(ref: str, location: str, mirror: Path) -> str:
     return location
 
 
-def clone(url: str, ref: str = "HEAD", location: str | None = None) -> str:
+def _warn_stale_tag(repo: Path, ref: str) -> None:
+    """Warn when `ref` is a tag behind the repository's default branch.
+
+    `copier copy <url>` without an explicit ref resolves to the latest tag,
+    which for a fork or a renamed repository can be a long-abandoned upstream
+    tag. The clone already exists at this point, so the distance is one
+    `rev-list --count` away. Any failure to measure (shallow history, missing
+    branch tip, detached repos) is swallowed silently: this is a hint, not a
+    gate.
+    """
+    git = get_git()
+    try:
+        # The default-branch tip: refs/remotes/origin/HEAD for plain clones,
+        # the common dir's HEAD for mirror worktrees (where the worktree's own
+        # HEAD is detached at the tag).
+        common = Path(git("-C", str(repo), "rev-parse", "--git-common-dir").strip())
+        tip = ""
+        origin_head = git(
+            "-C", str(repo), "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"
+        ).strip()
+        if origin_head:
+            tip = origin_head
+        else:
+            head_ref = git(
+                "--git-dir", str(common), "symbolic-ref", "-q", "HEAD"
+            ).strip()
+            if head_ref:
+                tip = head_ref.removeprefix("refs/heads/")
+        if not tip:
+            return
+        behind = int(
+            git("-C", str(repo), "rev-list", "--count", f"{ref}..{tip}").strip()
+        )
+    except (ProcessExecutionError, OSError, ValueError):
+        return
+    if behind > 0:
+        warn(
+            f"using tag {ref}, which is {behind} commits behind the default "
+            f"branch {tip.split('/')[-1]}. Pass an explicit ref (a newer "
+            f"release tag, or --vcs-ref={tip.split('/')[-1]} for unreleased "
+            "branch work) to render that instead.",
+            StaleTagWarning,
+        )
+
+
+def clone(
+    url: str,
+    ref: str = "HEAD",
+    location: str | None = None,
+    *,
+    warn_stale: bool = False,
+) -> str:
     """Clone repo into some temporary destination.
 
     Remote repositories are cached as a local git mirror and checked out into
@@ -372,6 +423,11 @@ def clone(url: str, ref: str = "HEAD", location: str | None = None) -> str:
         location:
             Pre-allocated empty directory to clone into. When `None`, a new
             temporary directory is created.
+        warn_stale:
+            Emit a [StaleTagWarning][copier.errors.StaleTagWarning] when the
+            checked-out ref is a tag that is behind the repository's default
+            branch. Set by the implicit latest-tag resolution path; callers
+            that pass an explicit ref keep it `False`.
     """
     git = get_git()
     git_version = get_git_version()
@@ -380,7 +436,10 @@ def clone(url: str, ref: str = "HEAD", location: str | None = None) -> str:
     # Remote templates: use a cached mirror + temporary worktree.
     if _is_remote(url):
         mirror = _get_or_create_mirror(url)
-        return _clone_via_cache(ref, location, mirror)
+        result = _clone_via_cache(ref, location, mirror)
+        if warn_stale:
+            _warn_stale_tag(mirror, ref)
+        return result
     # Local templates: keep the original clone behavior.
     _clone = git["clone", "--no-checkout", url, location]
     # Faster clones if possible
@@ -427,6 +486,8 @@ def clone(url: str, ref: str = "HEAD", location: str | None = None) -> str:
         ## ref: https://github.com/copier-org/copier/issues/1887
         git("-c", "core.fsmonitor=false", "checkout", "-f", ref)
         git("submodule", "update", "--checkout", "--init", "--recursive", "--force")
+    if warn_stale:
+        _warn_stale_tag(Path(location), ref)
 
     return location
 

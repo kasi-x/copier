@@ -1,5 +1,6 @@
 import os
 import shutil
+import warnings
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from unittest import mock
@@ -22,7 +23,7 @@ from copier._vcs import (
     get_repo,
     is_git_repo_root,
 )
-from copier.errors import DirtyLocalWarning, ShallowCloneWarning
+from copier.errors import DirtyLocalWarning, ShallowCloneWarning, StaleTagWarning
 
 from .helpers import build_file_tree, git, git_save
 
@@ -471,3 +472,48 @@ def test_get_git_version(git_version_output: str, expected_version: Version) -> 
         "copier._vcs.get_git", return_value=mock.MagicMock(side_effect=_mock_git)
     ):
         assert get_git_version() == expected_version
+
+
+def test_stale_tag_warning_fires_for_implicit_tag(tmp_path: Path) -> None:
+    """A template resolved via the implicit latest tag warns when the tag is
+    behind the default branch -- the fork-stale-tag trap."""
+    src = tmp_path / "src"
+    src.mkdir()
+    with local.cwd(src):
+        git("init", "-b", "main")
+        (src / "{{ _copier_conf.answers_file }}.jinja").write_text(
+            "{{ _copier_answers|to_nice_yaml }}"
+        )
+        git("add", ".")
+        git("commit", "-m", "v1")
+        git("tag", "v1.0.0")
+        for i in range(3):
+            (src / "f.txt").write_text(str(i))
+            git("add", ".")
+            git("commit", "-m", f"c{i}")
+
+    with pytest.warns(StaleTagWarning, match="3 commits behind"):
+        run_copy(str(src), tmp_path / "dst", defaults=True, unsafe=True)
+
+
+def test_no_stale_tag_warning_for_explicit_ref(tmp_path: Path) -> None:
+    """An explicit --vcs-ref choice is the user's own; no stale warning."""
+    src = tmp_path / "src"
+    src.mkdir()
+    with local.cwd(src):
+        git("init", "-b", "main")
+        (src / "{{ _copier_conf.answers_file }}.jinja").write_text(
+            "{{ _copier_answers|to_nice_yaml }}"
+        )
+        git("add", ".")
+        git("commit", "-m", "v1")
+        git("tag", "v1.0.0")
+        for i in range(3):
+            (src / "f.txt").write_text(str(i))
+            git("add", ".")
+            git("commit", "-m", f"c{i}")
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        run_copy(str(src), tmp_path / "dst", vcs_ref="HEAD", defaults=True, unsafe=True)
+    assert not [x for x in w if issubclass(x.category, StaleTagWarning)]
