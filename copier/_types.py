@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import (
@@ -131,3 +132,96 @@ class VcsRef(Enum):
     """A special value to indicate that the current ref of the existing
     template should be used.
     """
+
+
+@dataclass
+class QuestionSpec:
+    """A question of a template's questionnaire, rendered for the current answers.
+
+    Produced by `evaluate_questionnaire`. Field names mirror the question
+    keys accepted in `copier.yml`; templated fields hold the *rendered* value
+    evaluated against the answers already collected, exactly as the
+    interactive ask loop sees them.
+
+    Attributes:
+        var_name: The answer key (`var_name` in `copier.yml`).
+        type: Rendered question type (`str`, `bool`, `int`, `yaml`, `path`, ...).
+        help: Rendered help text (`""` when unset).
+        default: The rendered default, or `None` when the question has none.
+        required: `True` when no default applies — an answer must be provided.
+        choices: Rendered choices for choice-type questions (`[]` otherwise).
+        multiselect: Whether multiple choices are allowed.
+        secret: Whether the answer is treated as secret.
+        ask: `False` when the template declares `ask: false` (never prompted).
+        when: The evaluated visibility (`when:`) given the collected answers.
+        placeholder: Rendered placeholder text.
+        validator: The raw `validator` template (rendering needs a candidate
+            answer; use it via `parse/validate` semantics on the caller side
+            or inspect the template string).
+    """
+
+    var_name: str
+    type: str
+    help: str
+    default: Any
+    required: bool
+    choices: list[Any]
+    multiselect: bool
+    secret: bool
+    ask: bool
+    when: bool
+    placeholder: str
+    validator: str
+
+
+@dataclass
+class QuestionnaireResult:
+    """Result of evaluating a template's questionnaire without rendering.
+
+    Attributes:
+        questions:
+            The questionnaire's questions as `QuestionSpec` objects, in
+            declaration order, rendered against the collected answers. Lets
+            embedders (form builders, agents driving copier externally)
+            discover what is being asked — names, types, help, choices,
+            defaults, `when`/`ask` outcomes — without importing internals.
+
+        answers:
+            The resolved answers to the questionnaire, after applying `data`,
+            defaults and `when` handling. Same semantics as the answers
+            `Worker._ask` produces during a `copy` (i.e. the combined answers,
+            including defaults computed for skipped questions).
+
+        skipped:
+            Variable names of questions whose `when:` condition evaluated to a
+            falsy value. Such questions are still present in `answers` (with
+            their default, if any) but are omitted from
+            `answers_file_data`, exactly as `Worker._ask` omits them from the
+            answers file.
+
+        context:
+            The rendering context that `_render_context` would produce for this
+            answer set. Useful for downstream rendering by the caller.
+    """
+
+    questions: list[QuestionSpec]
+    answers: AnyByStrDict
+    skipped: list[str]
+    context: AnyByStrDict
+
+    @property
+    def _skipped_set(self) -> set[str]:
+        return set(self.skipped)
+
+    @property
+    def answers_file_data(self) -> AnyByStrDict:
+        """Answers that would be written to the copier answers file.
+
+        Mirrors `Worker._answers_to_remember`: excludes internal (`_`-prefixed)
+        keys and questions skipped via a falsy `when`.
+        """
+        return {
+            key: value
+            for key, value in self.answers.items()
+            if not key.startswith("_") and key not in self._skipped_set
+        }

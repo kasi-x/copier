@@ -71,6 +71,8 @@ from ._types import (
     LazyDict,
     Operation,
     Phase,
+    QuestionnaireResult,
+    QuestionSpec,
     RelativePath,
     VcsRef,
 )
@@ -83,6 +85,7 @@ from .errors import (
     ExtensionNotFoundError,
     ForbiddenPathError,
     InteractiveSessionError,
+    InvalidTypeError,
     TaskError,
     UnsafeTemplateError,
     UserMessageError,
@@ -271,6 +274,7 @@ class Worker:
     ask: Sequence[str] = ()
 
     answers: AnswersMap = field(default_factory=AnswersMap, init=False)
+    questions: list[Question] = field(default_factory=list, init=False)
     _cleanup_hooks: list[Callable[[], None]] = field(default_factory=list, init=False)
 
     def __enter__(self) -> Self:
@@ -620,6 +624,7 @@ class Worker:
                 var_name=var_name,
                 **details,
             )
+            self.questions.append(question)
             # Delete last answer if it cannot be parsed or validated, so a new
             # valid answer can be provided.
             if var_name in self.answers.last:
@@ -1795,6 +1800,221 @@ def run_copy(
     ) as worker:
         worker.run_copy()
     return worker
+
+
+def evaluate_questionnaire(
+    src_path: str,
+    data: dict[str, Any] | None = None,
+    *,
+    answers_file: Path | str | None = None,
+    vcs_ref: str | VcsRef | None = None,
+    settings: Settings | SettingsModel | None = None,
+    user_defaults: dict[str, Any] | None = None,
+    defaults: bool = True,
+    skip_answered: bool = False,
+    ask: Sequence[str] = (),
+) -> QuestionnaireResult:
+    """Evaluate a template's questionnaire without rendering or prompting.
+
+    This is a thin, public wrapper around the same asking logic that
+    `run_copy`/`run_update` use. It loads a template, resolves its questions
+    against the supplied `data` (a partial answers dict), applies defaults and
+    `when:` handling, and returns the resolved answers plus the list of
+    skipped questions — **without** rendering any file or touching the
+    destination filesystem.
+
+    This is intended for third-party tooling (web consoles, IDE extensions,
+    form builders, etc.) that want to collect answers in their own UI using
+    Copier's exact semantics instead of importing the now-internal
+    `Worker._ask`/`_render_context`.
+
+    See upstream issue copier-org/copier#2874.
+
+    Arguments:
+        src_path:
+            String that can be resolved to a template path, be it local or
+            remote. Accepts a template URL or a path to a local template.
+        data:
+            Partial answers to the questionnaire defined in the template.
+            Questions not covered here fall back to their default (or are
+            prompted for, see `defaults`).
+        answers_file:
+            Path for the answers file, relative to `dst_path`.
+        vcs_ref:
+            Specify the VCS tag/commit to use in the template.
+        settings:
+            Settings to use when loading the template. If `None`, the user's
+            settings are loaded.
+        user_defaults:
+            Specify user defaults that may override a template's defaults
+            during question prompts.
+        defaults:
+            When `True` (the default), use default answers for questions not
+            covered by `data`. When `False`, missing answers that have no
+            default raise an error (they would otherwise prompt).
+        skip_answered:
+            When `True`, skip questions that have already been answered. Not
+            meaningful for a fresh evaluation without a destination, but kept
+            for parity with `run_copy`'s ask logic.
+        ask:
+            List of question names to ask, even if they would be skipped by
+            other options. Supports glob-style patterns.
+
+    Returns:
+        A `QuestionnaireResult` holding `questions`, `answers`, `skipped` and `context`.
+
+    Raises:
+        copier.errors.UserMessageError:
+            If a required answer is missing, or a template error occurs while
+            evaluating the questionnaire.
+
+    Note:
+        This does **not** evaluate `unsafe`/`_check_unsafe` semantics: it only
+        resolves questions, and performs no rendering. Pass `settings`/`trust`
+        appropriately when loading remote templates.
+    """
+    # Build a Worker exactly like `run_copy` does, but render nothing.
+    # An inert temporary destination is used so that `Subproject` / `Template`
+    # construction (which needs an absolute local path) works, while no real
+    # files are written because we only run the ask + context phase.
+    with (
+        TemporaryDirectory() as tmp_dst,
+        Worker(
+            src_path=src_path,
+            dst_path=Path(tmp_dst),
+            data=data or {},
+            answers_file=(
+                RelativePath(answers_file)
+                if isinstance(answers_file, str)
+                else answers_file
+            ),
+            vcs_ref=vcs_ref,
+            settings=(
+                SettingsModel(defaults=settings.defaults, trust=settings.trust)
+                if isinstance(settings, Settings)
+                else (settings or SettingsModel.from_file())
+            ),
+            defaults=defaults,
+            user_defaults=user_defaults or {},
+            quiet=True,
+            skip_answered=skip_answered,
+            ask=ask,
+        ) as worker,
+        Phase.use(Phase.PROMPT),
+    ):
+        # Mirror run_copy's prompt phase, but skip _check_unsafe: this is
+        # an evaluation, not a copy, so unsafe-feature gating is irrelevant.
+        # A StrictUndefined template will surface errors here, which is the
+        # desired behavior for an evaluation API.
+        try:
+            worker._ask()
+        except ValueError as error:
+            # `Worker._ask` raises a plain ValueError when a question
+            # is required but missing. Surface it through the public,
+            # user-facing error type, matching run_copy's contract.
+            if not (
+                error.args
+                and isinstance(error.args[0], str)
+                and "is required" in error.args[0]
+            ):
+                raise
+            missing = _missing_required_questions(worker, defaults=defaults)
+            # Always include the name _ask reported, even if the scan
+            # could not recover additional ones.
+            scanned = _question_name_from_error(error)
+            for name in scanned:
+                if name not in missing:
+                    missing.append(name)
+            raise UserMessageError(
+                "Missing required question answers: " + ", ".join(missing)
+            ) from error
+        # `answers.hidden` holds exactly the questions whose `when:` was
+        # falsy (Worker._ask hides them via AnswersMap.hide).
+        answers = dict(worker.answers.combined)
+        skipped = sorted(worker.answers.hidden)
+        context = worker._render_context()
+        questions = [_question_spec(q) for q in worker.questions]
+    return QuestionnaireResult(
+        questions=questions, answers=answers, skipped=skipped, context=context
+    )
+
+
+def _question_spec(question: Question) -> QuestionSpec:
+    """Snapshot a built `Question` into a public `QuestionSpec`.
+
+    Renders templated fields against the answers collected so far — the same
+    values the interactive ask loop shows the user.
+    """
+    default = question.get_default()
+    try:
+        type_name = question.get_type_name()
+    except InvalidTypeError:
+        type_name = str(question.type)
+    return QuestionSpec(
+        var_name=question.var_name,
+        type=type_name,
+        help=(
+            str(question.render_value(question.help)).strip() if question.help else ""
+        ),
+        default=None if default is MISSING else default,
+        required=default is MISSING and not question.secret,
+        choices=[c.value for c in question._formatted_choices],
+        multiselect=question.multiselect,
+        secret=question.secret,
+        ask=question.get_ask(),
+        when=question.get_when(),
+        placeholder=question.get_placeholder(),
+        validator=question.validator,
+    )
+
+
+def _missing_required_questions(worker: Worker, *, defaults: bool) -> list[str]:
+    """Find questions that are required but cannot be answered.
+
+    Reproduces the condition under which `Worker._ask` raises
+    `ValueError('Question "<name>" is required')` (the `defaults=True` branch),
+    so that `evaluate_questionnaire` can raise a `UserMessageError` listing all
+    such names instead of just the first.
+    """
+    missing: list[str] = []
+    for var_name, details in worker.template.questions_data.items():
+        question = Question(
+            answers=worker.answers,
+            context=worker._render_context(),
+            jinja_env=worker.jinja_env,
+            settings=worker.settings,
+            var_name=var_name,
+            **details,
+        )
+        # Evaluating a question's `when`/`default` may raise (e.g. a rendering
+        # error). Such a question can't be safely classified as "required but
+        # missing" here; skip it rather than masking the original error.
+        try:
+            when = question.get_when()
+            if not when:
+                continue
+            if var_name in worker.answers.init:
+                continue
+            if var_name in worker.answers.last and (
+                worker.skip_answered or worker.answers.last[var_name] is not None
+            ):
+                continue
+            ask_explicit = question.get_ask()
+            if not ask_explicit and var_name in worker.answers.last:
+                continue
+            if not defaults:
+                continue
+            has_default = question.get_default() is not MISSING
+        except Exception:  # noqa: BLE001, S112
+            continue
+        if not has_default:
+            missing.append(var_name)
+    return missing
+
+
+def _question_name_from_error(error: ValueError) -> list[str]:
+    """Extract quoted question var_names from a `ValueError` raised by `_ask`."""
+    return re.findall(r'"([^"]+)"', error.args[0]) if error.args else []
 
 
 def run_recopy(

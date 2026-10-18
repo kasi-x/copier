@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from . import _main
 from ._deprecation import deprecate_member_as_internal
 from ._settings import Settings, load_settings
-from ._types import Phase, VcsRef
+from ._types import Phase, QuestionnaireResult, QuestionSpec, VcsRef
 
 if TYPE_CHECKING:
     from ._main import *  # noqa: F403
@@ -22,6 +22,7 @@ except importlib.metadata.PackageNotFoundError:
 
 def __getattr__(name: str) -> Any:
     if not name.startswith("_") and name not in {
+        "evaluate_questionnaire",
         "run_copy",
         "run_recopy",
         "run_update",
@@ -32,8 +33,11 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "Phase",
+    "QuestionSpec",
+    "QuestionnaireResult",
     "Settings",
     "VcsRef",
+    "evaluate_questionnaire",  # noqa: F405
     "load_settings",
     "run_copy",  # noqa: F405
     "run_recopy",  # noqa: F405

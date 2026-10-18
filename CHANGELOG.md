@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file. This projec
 adheres to [PEP 440](https://www.python.org/dev/peps/pep-0440/) versioning schema, and
 the changelog itself conforms to [Keep A Changelog](https://keepachangelog.com/).
 
+## Unreleased
+
+### Feat
+
+- **api**: add a public `evaluate_questionnaire` API to evaluate a template's
+  questionnaire (resolve `data`, defaults and `when` conditions) without
+  rendering or prompting, returning a `QuestionnaireResult` with `questions`
+  (rendered `QuestionSpec` objects), `answers`, `skipped` and `context` (#2874)
+
 ## v9.19.1 (2026-10-13)
 
 ### Fix
