@@ -800,10 +800,87 @@ class Worker:
         """Get a callable to match paths against all skip-if-exists patterns."""
         return self._path_matcher(map(self._render_string, self.all_skip_if_exists))
 
-    def _render_template(self) -> None:
+    def _eval_gate(self, gate_abspath: Path, gate_relpath: Path) -> bool:
+        """Evaluate a ``.gate`` marker file's Jinja expression.
+
+        Args:
+            gate_abspath:
+                Absolute path to the ``.gate`` marker file.
+            gate_relpath:
+                The ``.gate`` file's path relative to the template copy root,
+                used to build a helpful error message.
+
+        Returns:
+            Whether the gated source path should be copied (``True``) or skipped
+            (``False``).
+        """
+        try:
+            content = gate_abspath.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as error:
+            raise UserMessageError(
+                f"Could not read gate file {gate_relpath}: {error}"
+            ) from error
+        expression = "\n".join(
+            line for line in content.splitlines() if not line.lstrip().startswith("#")
+        ).strip()
+        # An empty (or comment-only) expression gates the path out.
+        if not expression:
+            return False
+        try:
+            rendered = self.jinja_env.from_string(expression).render(
+                **self._render_context()
+            )
+        except TemplateError as error:
+            raise UserMessageError(
+                f"Error rendering gate file {gate_relpath}: {error}"
+            ) from error
+        return bool(cast_to_bool(rendered))
+
+    def _path_is_gated(
+        self, src_abspath: Path, src_relpath: Path, gated_dirs: set[Path]
+    ) -> bool:
+        """Tell if a ``.gate`` marker excludes ``src_abspath`` from the output.
+
+        Two marker forms are supported, checked in order:
+
+        - Sibling form: a file ``<path>.gate`` next to the source path decides
+          whether that path is copied.
+        - Dotfile form: a file ``<dir>/.gate`` inside a directory gates the whole
+          directory subtree. A gated directory is recorded in ``gated_dirs`` so
+          its descendants are skipped too.
+
+        Args:
+            src_abspath:
+                Absolute path of the source entry being considered.
+            src_relpath:
+                Same path relative to the template copy root.
+            gated_dirs:
+                Mutable set of gated-out source directories. Gated directories
+                are added to it so their descendants get skipped later.
+        """
+        sibling_gate = src_abspath.parent / f"{src_abspath.name}.gate"
+        if sibling_gate.is_file():
+            gate_relpath = src_relpath.parent / f"{src_relpath.name}.gate"
+            if not self._eval_gate(sibling_gate, gate_relpath):
+                if src_abspath.is_dir():
+                    gated_dirs.add(src_abspath)
+                return True
+            return False
+        dotfile_gate = src_abspath / ".gate"
+        if dotfile_gate.is_file():
+            gate_relpath = src_relpath / ".gate"
+            if not self._eval_gate(dotfile_gate, gate_relpath):
+                if src_abspath.is_dir():
+                    gated_dirs.add(src_abspath)
+                return True
+            return False
+        return False
+
+    def _render_template(self) -> None:  # noqa: C901
         """Render the template in the subproject root."""
         follow_symlinks = not self.template.preserve_symlinks
         dst_root = self.dst_path.resolve()
+        gated_dirs: set[Path] = set()
         for src in scantree(str(self.template_copy_root), follow_symlinks):
             src_abspath = Path(src.path)
             # If the source is a symlink, we are not preserving symlinks, and the
@@ -821,9 +898,20 @@ class Worker:
                     path=src_abspath.relative_to(self.template_copy_root)
                 )
             src_relpath = Path(src_abspath).relative_to(self.template.local_abspath)
-            dst_relpaths_ctxs = self._render_path(
-                Path(src_abspath).relative_to(self.template_copy_root)
+            # ``.gate`` marker files are metadata, never copied to the output.
+            if src.name.endswith(".gate"):
+                continue
+            # Skip any entry inside a directory whose ``.gate`` marker was falsy.
+            if gated_dirs and any(
+                src_abspath.is_relative_to(gated_dir) for gated_dir in gated_dirs
+            ):
+                continue
+            src_template_relpath = Path(src_abspath).relative_to(
+                self.template_copy_root
             )
+            if self._path_is_gated(src_abspath, src_template_relpath, gated_dirs):
+                continue
+            dst_relpaths_ctxs = self._render_path(src_template_relpath)
             for dst_relpath, ctx in dst_relpaths_ctxs:
                 dst_abspath = dst_root / dst_relpath
                 if dst_abspath.is_symlink():

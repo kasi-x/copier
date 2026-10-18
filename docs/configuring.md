@@ -641,6 +641,71 @@ your_template
 
     On Windows, double-quotes are not valid characters in file and directory paths.
     This is why we used **single-quotes** in the example above.
+### `.gate` marker files
+
+Sometimes it is convenient to keep the condition *next to the file* instead of
+nesting Jinja inside the file or directory name, or listing it in
+[`exclude`](#exclude). Copier supports a convention-based marker file suffixed
+`.gate` that is placed next to the path it guards. No configuration is required:
+when no `.gate` file is present, behavior is unchanged.
+
+The content of a `.gate` file is a [Jinja](#jinja_extensions) expression rendered
+in the same context as templates. Leading whitespace is stripped, and lines
+starting with `#` are treated as comments and ignored. If the rendered
+expression is truthy, the sibling path is copied as usual; if it is falsy (or the
+file is empty/comment-only), the path is skipped.
+
+| Path in template | Gate marker | Effect when falsy |
+| --- | --- | --- |
+| `keep.txt` | `keep.txt.gate` | `keep.txt` is not copied |
+| `sub/` | `sub/.gate` | the whole `sub/` subtree is not copied |
+| `sub/` | `sub.gate` | the whole `sub/` subtree is not copied |
+
+```tree result="shell"
+your_template
+    copier.yml
+    keep.txt
+    keep.txt.gate
+    sub
+        .gate
+        file.txt
+```
+
+!!! example
+
+    With this `copier.yml`:
+
+    ```yaml
+    feature_a:
+        type: bool
+        default: false
+        help: Enable feature A?
+    ```
+
+    `keep.txt.gate` holds:
+
+    ```jinja
+    {{ feature_a }}
+    ```
+
+    When `feature_a` is `false`, `keep.txt` is omitted from the generated project.
+    When it is `true`, `keep.txt` is generated as usual.
+
+!!! important
+
+    - `.gate` files are **never** copied to the output. They are template
+      metadata only.
+    - A `.gate` marker applies on top of [`exclude`](#exclude): a path excluded by
+      `exclude` is still skipped even if its `.gate` evaluates to truthy.
+    - An error while evaluating a `.gate` expression is reported as a
+      [`UserMessageError`](errors.md), naming the gate file, rather than being
+      silently ignored.
+
+!!! note
+
+    Because `.gate` files have no effect when absent, introducing them in an
+    existing template never changes existing output — only paths that gain a
+    `.gate` file become conditional.
 
 ## Generating a directory structure
 
