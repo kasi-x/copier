@@ -1954,6 +1954,18 @@ def get_update_data(
     return (update_available, current_version, latest_version)
 
 
+def run_adopt(*args: Any, **kwargs: Any) -> Any:
+    """Lazy re-export of [copier._adopt.run_adopt].
+
+    Imported here (rather than at module top) to avoid a circular import,
+    since `copier._adopt` imports `Worker` from this module.
+    """
+    # pylint: disable=import-outside-toplevel
+    from ._adopt import run_adopt as _run_adopt
+
+    return _run_adopt(*args, **kwargs)
+
+
 def _remove_old_files(prefix: Path, cmp: dircmp[str], rm_common: bool = False) -> None:
     """Remove files and directories only found in "old" template.
 

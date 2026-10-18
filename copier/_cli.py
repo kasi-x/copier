@@ -67,7 +67,7 @@ from typing import Literal, cast
 import yaml
 from plumbum import LocalPath, cli, colors
 
-from ._main import get_update_data, run_copy, run_recopy, run_update
+from ._main import get_update_data, run_adopt, run_copy, run_recopy, run_update
 from ._tools import copier_version, try_enum
 from ._types import AnyByStrDict, VcsRef
 from .errors import UnsafeTemplateError, UserMessageError
@@ -563,5 +563,87 @@ class CopierCheckUpdateSubApp(cli.Application):
                     # TODO Unify printing tools
                     print("Project is up-to-date!")
             return 0
+
+        return _handle_exceptions(inner)
+
+
+@CopierApp.subcommand("adopt")
+class CopierAdoptSubApp(_Subcommand):
+    """The `copier adopt` subcommand.
+
+    Use this subcommand to adopt a template into an *existing* project that
+    was not originally created with Copier. Unlike `copier copy`, this never
+    overwrites content that already exists: new files are created, and
+    conflicting files are written alongside the original as `<file>.copier-new`.
+    A crash journal (``.copier-adopt.json``) and backups
+    (``.copier-adopt-backup/``) are maintained so an interrupted apply can be
+    resumed with `--recover` or rolled back with `--rollback`.
+    """
+
+    DESCRIPTION = "Adopt a template into an existing project."
+
+    defaults = cli.Flag(
+        ["-l", "--defaults"],
+        help="Use default answers to questions, which might be null if not specified.",
+    )
+    force = cli.Flag(
+        ["-f", "--force"],
+        help="Same as `--defaults`.",
+    )
+    plan = cli.Flag(
+        ["--plan"],
+        help="Only describe what would happen; write nothing.",
+    )
+    recover = cli.Flag(
+        ["--recover"],
+        help="Resume an interrupted adopt from the crash journal.",
+    )
+    rollback = cli.Flag(
+        ["--rollback"],
+        help="Restore the pre-adopt state from the journal and backups.",
+    )
+    ask = cli.SwitchAttr(
+        ["--ask"],
+        str,
+        list=True,
+        help=(
+            "Ask the questions matching the given glob-pattern, even if they would be "
+            "skipped by other options"
+        ),
+    )
+
+    def main(self, template_src: str, destination_path: str) -> int:
+        """Call [run_adopt][copier.run_adopt].
+
+        Params:
+            template_src:
+                Indicate where to get the template from.
+
+                This can be a git URL or a local path.
+
+            destination_path:
+                An existing, non-Copier project to adopt the template into.
+        """
+
+        def inner() -> None:
+            run_adopt(
+                template_src,
+                destination_path,
+                data=self.data,
+                answers_file=self.answers_file,
+                vcs_ref=try_enum(VcsRef, self.vcs_ref),
+                exclude=self.exclude,
+                use_prereleases=self.prereleases,
+                skip_if_exists=self.skip,
+                defaults=self.force or self.defaults,
+                unsafe=self.unsafe,
+                skip_tasks=self.skip_tasks,
+                ask=self.ask,
+                quiet=self.quiet,
+                pretend=self.pretend,
+                plan=self.plan,
+                recover=self.recover,
+                rollback=self.rollback,
+            )
 
         return _handle_exceptions(inner)
